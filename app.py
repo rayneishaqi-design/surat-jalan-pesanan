@@ -1,4 +1,3 @@
-
 import re
 from io import BytesIO
 from pathlib import Path
@@ -9,7 +8,7 @@ import pdfplumber
 import streamlit as st
 
 from reportlab.lib import colors
-from reportlab.lib.enums import TA_RIGHT, TA_CENTER, TA_LEFT
+from reportlab.lib.enums import TA_RIGHT, TA_CENTER
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import mm
@@ -19,8 +18,7 @@ from reportlab.platypus import (
     Spacer,
     Table,
     TableStyle,
-    Image as RLImage,
-    KeepTogether
+    Image as RLImage
 )
 
 
@@ -185,15 +183,6 @@ def format_number(value):
     return f"{int(round(float(value))):,}".replace(",", ".")
 
 
-def format_total(value):
-    return (
-        f"{float(value):,.2f}"
-        .replace(",", "X")
-        .replace(".", ",")
-        .replace("X", ".")
-    )
-
-
 def format_percent(value):
     return f"{float(value):.2f}".replace(".", ",") + "%"
 
@@ -292,20 +281,29 @@ def extract_header(pdf_bytes):
         if line.strip()
     ]
 
-    # DARI dan No Transfer
+    # DARI
     match = re.search(
-        r"DARI\s*:\s*(.*?)\s+No\.?\s*Transfer\s+([A-Z0-9\-]+)",
+        r"DARI\s*:\s*(.*?)(?=\s+No\.?\s*Transfer\b|\n|$)",
         text,
         re.IGNORECASE
     )
 
     if match:
         result["dari"] = match.group(1).strip()
-        result["no_transfer"] = match.group(2).strip()
+
+    # NOMOR TRANSFER
+    match = re.search(
+        r"No\.?\s*Transfer\s*:\s*([A-Z0-9\-]+)",
+        text,
+        re.IGNORECASE
+    )
+
+    if match:
+        result["no_transfer"] = match.group(1).strip()
 
     # TANGGAL
     match = re.search(
-        r"Tanggal\s+(\d{1,2}\s+[A-Za-z]{3,}\s+\d{4})",
+        r"Tanggal\s*:\s*(\d{1,2}\s+[A-Za-z]{3,}\s+\d{4})",
         text,
         re.IGNORECASE
     )
@@ -331,7 +329,14 @@ def extract_header(pdf_bytes):
             )[1]
 
             bagian = re.sub(
-                r"\s+Tanggal\s+\d{1,2}\s+[A-Za-z]{3,}\s+\d{4}.*$",
+                r"\s+No\.?\s*Transfer.*$",
+                "",
+                bagian,
+                flags=re.IGNORECASE
+            )
+
+            bagian = re.sub(
+                r"\s+Tanggal\s*:.*$",
                 "",
                 bagian,
                 flags=re.IGNORECASE
@@ -344,7 +349,11 @@ def extract_header(pdf_bytes):
 
         if tujuan_started:
 
-            if re.search(r"\bNO\s+SKU\b", line, re.IGNORECASE):
+            if re.search(
+                r"\bNO\s+SKU\b",
+                line,
+                re.IGNORECASE
+            ):
                 break
 
             if re.match(
@@ -467,9 +476,9 @@ def build_pdf(df, header, diskon):
         leftMargin=13 * mm,
         rightMargin=13 * mm,
         topMargin=9 * mm,
-        bottomMargin=12 * mm,
+        bottomMargin=65 * mm,
         title="Surat Jalan OXAR GLOBAL",
-        author="OXAR GLOBAL"
+        author="OXAR GLOBAL",
     )
 
     styles = getSampleStyleSheet()
@@ -486,17 +495,8 @@ def build_pdf(df, header, diskon):
         name="TitleCustom",
         fontName="Helvetica-Bold",
         fontSize=21,
-        leading=24,
+        leading=25,
         alignment=TA_RIGHT,
-        textColor=colors.black
-    ))
-
-    styles.add(ParagraphStyle(
-        name="MetadataRight",
-        fontName="Helvetica",
-        fontSize=8.5,
-        leading=11,
-        alignment=TA_LEFT,
         textColor=colors.black
     ))
 
@@ -517,29 +517,11 @@ def build_pdf(df, header, diskon):
         textColor=colors.black
     ))
 
-    styles.add(ParagraphStyle(
-        name="SignatureHead",
-        fontName="Helvetica-Bold",
-        fontSize=8.5,
-        leading=11,
-        alignment=TA_CENTER,
-        textColor=colors.black
-    ))
-
-    styles.add(ParagraphStyle(
-        name="SignatureLine",
-        fontName="Helvetica",
-        fontSize=8,
-        leading=10,
-        alignment=TA_CENTER,
-        textColor=colors.black
-    ))
-
     story = []
 
-    # -----------------------------------------------------
-    # LOGO DAN JUDUL
-    # -----------------------------------------------------
+    # =====================================================
+    # HEADER: LOGO DAN SURAT JALAN
+    # =====================================================
 
     if LOGO_FILE.exists():
 
@@ -558,45 +540,33 @@ def build_pdf(df, header, diskon):
             styles["SmallCustom"]
         )
 
-    right_header = Table(
-        [
-            [Paragraph("SURAT JALAN", styles["TitleCustom"])]
-        ],
-        colWidths=[88 * mm]
+    title_header = Paragraph(
+        "SURAT JALAN",
+        styles["TitleCustom"]
     )
 
-    right_header.setStyle(TableStyle([
-        ("ALIGN", (0, 0), (-1, -1), "RIGHT"),
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 0),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
-        ("TOPPADDING", (0, 0), (-1, -1), 0),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 0)
-    ]))
-
-    header_table = Table(
-        [[logo, right_header]],
+    header_top = Table(
+        [[logo, title_header]],
         colWidths=[92 * mm, 88 * mm],
-        rowHeights=[18 * mm]
+        rowHeights=[22 * mm]
     )
 
-    header_table.setStyle(TableStyle([
+    header_top.setStyle(TableStyle([
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("ALIGN", (0, 0), (0, 0), "LEFT"),
         ("ALIGN", (1, 0), (1, 0), "RIGHT"),
         ("LEFTPADDING", (0, 0), (-1, -1), 0),
         ("RIGHTPADDING", (0, 0), (-1, -1), 0),
         ("TOPPADDING", (0, 0), (-1, -1), 0),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 0)
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
     ]))
 
-    story.append(header_table)
-    story.append(Spacer(1, 4 * mm))
+    story.append(header_top)
 
-    # -----------------------------------------------------
-    # DARI / TUJUAN DAN NO. TRANSFER / TANGGAL
-    # KEDUANYA SEJAJAR
-    # -----------------------------------------------------
+    # =====================================================
+    # INFORMASI DARI DAN TUJUAN
+    # SEJAJAR DENGAN NO TRANSFER DAN TANGGAL
+    # =====================================================
 
     lokasi_asal = (header.get("dari") or "").strip()
 
@@ -606,79 +576,55 @@ def build_pdf(df, header, diskon):
         else "OXAR"
     )
 
-    left_info = Table(
-        [
-            [
-                Paragraph(
-                    f"<b>DARI:</b> {escape_html(dari_text)}",
-                    styles["SmallCustom"]
-                )
-            ],
-            [
-                Paragraph(
-                    f"<b>TUJUAN:</b> {escape_html(header.get('tujuan') or '-')}",
-                    styles["SmallCustom"]
-                )
-            ]
-        ],
-        colWidths=[92 * mm]
-    )
+    left_info = [
+        Paragraph(
+            f"<b>DARI:</b> {escape_html(dari_text)}",
+            styles["SmallCustom"]
+        ),
 
-    left_info.setStyle(TableStyle([
-        ("ALIGN", (0, 0), (-1, -1), "LEFT"),
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 0),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
-        ("TOPPADDING", (0, 0), (-1, -1), 1),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 3)
-    ]))
+        Spacer(1, 2 * mm),
 
-    right_info = Table(
-        [
-            [
-                Paragraph(
-                    f"<b>No. Transfer:</b> {escape_html(header.get('no_transfer') or '-')}",
-                    styles["MetadataRight"]
-                )
-            ],
-            [
-                Paragraph(
-                    f"<b>Tanggal:</b> {escape_html(header.get('tanggal') or '-')}",
-                    styles["MetadataRight"]
-                )
-            ]
-        ],
-        colWidths=[88 * mm]
-    )
+        Paragraph(
+            f"<b>TUJUAN:</b> {escape_html(header.get('tujuan') or '-')}",
+            styles["SmallCustom"]
+        ),
+    ]
 
-    right_info.setStyle(TableStyle([
-        ("ALIGN", (0, 0), (-1, -1), "LEFT"),
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 0),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
-        ("TOPPADDING", (0, 0), (-1, -1), 1),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 3)
-    ]))
+    right_info = [
+        Paragraph(
+            f"<b>No. Transfer:</b> {escape_html(header.get('no_transfer') or '-')}",
+            styles["SmallCustom"]
+        ),
 
-    info_row = Table(
+        Spacer(1, 2 * mm),
+
+        Paragraph(
+            f"<b>Tanggal:</b> {escape_html(header.get('tanggal') or '-')}",
+            styles["SmallCustom"]
+        ),
+    ]
+
+    info_table = Table(
         [[left_info, right_info]],
         colWidths=[92 * mm, 88 * mm]
     )
 
-    info_row.setStyle(TableStyle([
+    info_table.setStyle(TableStyle([
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("ALIGN", (0, 0), (-1, -1), "LEFT"),
         ("LEFTPADDING", (0, 0), (-1, -1), 0),
         ("RIGHTPADDING", (0, 0), (-1, -1), 0),
         ("TOPPADDING", (0, 0), (-1, -1), 0),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 0)
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
     ]))
 
-    story.append(info_row)
+    story.append(info_table)
+
     story.append(Spacer(1, 9 * mm))
 
-    # -----------------------------------------------------
+    # =====================================================
     # TABEL PRODUK
-    # -----------------------------------------------------
+    # =====================================================
 
     table_data = [[
         Paragraph("NO", styles["HeaderCustom"]),
@@ -687,7 +633,7 @@ def build_pdf(df, header, diskon):
         Paragraph("QTY", styles["HeaderCustom"]),
         Paragraph("HARGA (UNIT)", styles["HeaderCustom"]),
         Paragraph("DISKON", styles["HeaderCustom"]),
-        Paragraph("HARGA SETELAH<br/>DISKON", styles["HeaderCustom"])
+        Paragraph("HARGA SETELAH<br/>DISKON", styles["HeaderCustom"]),
     ]]
 
     subtotal = 0
@@ -702,8 +648,14 @@ def build_pdf(df, header, diskon):
         harga = int(row["HARGA (UNIT)"])
 
         nilai_subtotal = qty * harga
-        nilai_diskon = nilai_subtotal * float(diskon) / 100
-        harga_setelah_diskon = nilai_subtotal - nilai_diskon
+
+        nilai_diskon = (
+            nilai_subtotal * float(diskon) / 100
+        )
+
+        harga_setelah_diskon = (
+            nilai_subtotal - nilai_diskon
+        )
 
         subtotal += nilai_subtotal
         total_diskon += nilai_diskon
@@ -719,7 +671,7 @@ def build_pdf(df, header, diskon):
             format_number(qty),
             rupiah(harga),
             format_percent(diskon),
-            rupiah(harga_setelah_diskon)
+            rupiah(harga_setelah_diskon),
         ])
 
     column_widths = [
@@ -753,14 +705,14 @@ def build_pdf(df, header, diskon):
         ("LEFTPADDING", (0, 0), (-1, -1), 3),
         ("RIGHTPADDING", (0, 0), (-1, -1), 3),
         ("TOPPADDING", (0, 0), (-1, -1), 4),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 4)
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
     ]))
 
     story.append(product_table)
 
-    # -----------------------------------------------------
-    # TOTAL QTY DI BAWAH KOLOM QTY
-    # -----------------------------------------------------
+    # =====================================================
+    # TOTAL QTY
+    # =====================================================
 
     qty_summary = Table(
         [[
@@ -784,15 +736,16 @@ def build_pdf(df, header, diskon):
         ("LEFTPADDING", (0, 0), (-1, -1), 3),
         ("RIGHTPADDING", (0, 0), (-1, -1), 3),
         ("TOPPADDING", (0, 0), (-1, -1), 3),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 3)
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
     ]))
 
     story.append(qty_summary)
+
     story.append(Spacer(1, 3 * mm))
 
-    # -----------------------------------------------------
+    # =====================================================
     # RINGKASAN PERHITUNGAN
-    # -----------------------------------------------------
+    # =====================================================
 
     grand_total = subtotal - total_diskon
 
@@ -800,7 +753,7 @@ def build_pdf(df, header, diskon):
         ["", "", "", "", "Sub Total", rupiah(subtotal)],
         ["", "", "", "", "Diskon", rupiah(total_diskon)],
         ["", "", "", "", "Diskon Lainnya", rupiah(0)],
-        ["", "", "", "", "Grand Total", rupiah(grand_total)]
+        ["", "", "", "", "Grand Total", rupiah(grand_total)],
     ]
 
     summary_widths = [
@@ -828,15 +781,16 @@ def build_pdf(df, header, diskon):
         ("LEFTPADDING", (0, 0), (-1, -1), 3),
         ("RIGHTPADDING", (0, 0), (-1, -1), 3),
         ("TOPPADDING", (0, 0), (-1, -1), 2),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 2)
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
     ]))
 
     story.append(summary_table)
+
     story.append(Spacer(1, 5 * mm))
 
-    # -----------------------------------------------------
+    # =====================================================
     # CATATAN
-    # -----------------------------------------------------
+    # =====================================================
 
     story.append(
         Paragraph(
@@ -852,72 +806,72 @@ def build_pdf(df, header, diskon):
         )
     )
 
-    # -----------------------------------------------------
-    # TIGA TANDA TANGAN
-    # DITEMPATKAN DI BAWAH CATATAN
-    # DAN DI ATAS TANGGAL CETAK
-    # -----------------------------------------------------
-
-    story.append(Spacer(1, 18 * mm))
-
-    signature_data = [
-        [
-            Paragraph("Diterima Oleh,", styles["SignatureHead"]),
-            Paragraph("Dikirim Oleh,", styles["SignatureHead"]),
-            Paragraph("Hormat Kami,", styles["SignatureHead"])
-        ],
-        ["", "", ""],
-        [
-            Paragraph(
-                "( ........................................ )",
-                styles["SignatureLine"]
-            ),
-            Paragraph(
-                "( ........................................ )",
-                styles["SignatureLine"]
-            ),
-            Paragraph(
-                "( ........................................ )",
-                styles["SignatureLine"]
-            )
-        ]
-    ]
-
-    signature_table = Table(
-        signature_data,
-        colWidths=[60 * mm, 60 * mm, 60 * mm],
-        rowHeights=[7 * mm, 13 * mm, 7 * mm]
-    )
-
-    signature_table.setStyle(TableStyle([
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 1),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 1),
-        ("TOPPADDING", (0, 0), (-1, -1), 0),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 0)
-    ]))
-
-    story.append(
-        KeepTogether([signature_table])
-    )
-
-    # -----------------------------------------------------
-    # TANGGAL CETAK PALING BAWAH
-    # -----------------------------------------------------
+    # =====================================================
+    # TANDA TANGAN DAN TANGGAL CETAK
+    # DIGAMBAR DI BAGIAN BAWAH HALAMAN
+    # =====================================================
 
     def draw_print_date(canvas, document):
 
         canvas.saveState()
 
-        canvas.setFont("Helvetica", 8)
-        canvas.setFillColor(colors.HexColor("#333333"))
+        page_width, page_height = A4
+
+        centers = [
+            page_width * 0.185,
+            page_width * 0.50,
+            page_width * 0.815
+        ]
+
+        headings = [
+            "Diterima Oleh,",
+            "Dikirim Oleh,",
+            "Hormat Kami,"
+        ]
+
+        # JUDUL TANDA TANGAN
+        canvas.setFont(
+            "Helvetica-Bold",
+            8.5
+        )
+
+        for x, heading in zip(centers, headings):
+
+            canvas.drawCentredString(
+                x,
+                48 * mm,
+                heading
+            )
+
+        # TEMPAT TANDA TANGAN
+        canvas.setFont(
+            "Helvetica",
+            8
+        )
+
+        for x in centers:
+
+            canvas.drawCentredString(
+                x,
+                24 * mm,
+                "( .................................... )"
+            )
+
+        # TANGGAL CETAK PALING BAWAH
+        canvas.setFont(
+            "Helvetica",
+            8
+        )
+
+        canvas.setFillColor(
+            colors.HexColor("#333333")
+        )
 
         canvas.drawString(
             13 * mm,
             9 * mm,
-            "Dicetak tanggal : " +
-            datetime.now().strftime("%d %b %Y %H:%M")
+            "Dicetak tanggal : "
+            + datetime.now().strftime("%d %b %Y %H:%M")
         )
 
         canvas.restoreState()
@@ -989,6 +943,7 @@ if uploaded_file:
     items, errors = extract_sku_qty(pdf_bytes)
 
     for error in errors:
+
         st.warning(error)
 
     if not items:
@@ -1109,11 +1064,17 @@ if uploaded_file:
         product = master_db[item["sku"]]
 
         product_data.append({
+
             "SKU": item["sku"],
+
             "NAMA BARANG": product["nama_produk"],
+
             "QTY": item["qty"],
+
             "HARGA (UNIT)": product["harga"],
+
             "DISKON (%)": diskon
+
         })
 
     df = pd.DataFrame(product_data)

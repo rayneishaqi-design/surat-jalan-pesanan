@@ -493,16 +493,16 @@ def build_pdf(df, header, diskon):
         pagesize=A4,
         leftMargin=13 * mm,
         rightMargin=13 * mm,
-        topMargin=10 * mm,
-        bottomMargin=25 * mm,
+        topMargin=9 * mm,
+        bottomMargin=22 * mm,
         title="Surat Jalan OXAR GLOBAL",
         author="OXAR GLOBAL",
     )
 
     styles = getSampleStyleSheet()
     styles.add(ParagraphStyle(
-        name="SmallCustom", fontName="Helvetica", fontSize=8,
-        leading=10, textColor=colors.black
+        name="SmallCustom", fontName="Helvetica", fontSize=8.5,
+        leading=11, textColor=colors.black
     ))
     styles.add(ParagraphStyle(
         name="TitleCustom", fontName="Helvetica-Bold", fontSize=21,
@@ -527,9 +527,7 @@ def build_pdf(df, header, diskon):
 
     story = []
 
-    # -----------------------------------------------------
-    # LOGO DAN JUDUL SURAT JALAN
-    # -----------------------------------------------------
+    # LOGO DAN JUDUL
     if LOGO_FILE.exists():
         logo = RLImage(str(LOGO_FILE), width=39 * mm, height=15 * mm)
         logo.hAlign = "LEFT"
@@ -539,7 +537,7 @@ def build_pdf(df, header, diskon):
     header_table = Table(
         [[logo, Paragraph("SURAT JALAN", styles["TitleCustom"])]],
         colWidths=[92 * mm, 88 * mm],
-        rowHeights=[20 * mm],
+        rowHeights=[19 * mm],
     )
     header_table.setStyle(TableStyle([
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
@@ -551,24 +549,26 @@ def build_pdf(df, header, diskon):
         ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
     ]))
     story.append(header_table)
-    story.append(Spacer(1, 8 * mm))
+    story.append(Spacer(1, 5 * mm))
 
-    # -----------------------------------------------------
-    # ASAL OXAR, TUJUAN, NOMOR TRANSFER, DAN TANGGAL
-    # Lokasi asal dibaca dari kolom DARI pada PDF yang diunggah.
-    # Contoh: DARI: OXAR Banjarmasin.
-    # -----------------------------------------------------
+    # DARI, TUJUAN, NOMOR TRANSFER, TANGGAL
     lokasi_asal = (header.get("dari") or "").strip()
     dari_text = f"OXAR {lokasi_asal}" if lokasi_asal else "OXAR"
 
     left_info = [
         Paragraph(f"<b>DARI:</b> {escape_html(dari_text)}", styles["SmallCustom"]),
-        Spacer(1, 3 * mm),
-        Paragraph(f"<b>TUJUAN:</b> {escape_html(header.get('tujuan', ''))}", styles["SmallCustom"]),
+        Spacer(1, 2 * mm),
+        Paragraph(f"<b>TUJUAN:</b> {escape_html(header.get('tujuan') or '-')}", styles["SmallCustom"]),
     ]
     right_info = [
-        Paragraph(f"<b>No. Transfer:</b> {escape_html(header.get('no_transfer', ''))}", styles["SmallCustom"]),
-        Paragraph(f"<b>Tanggal:</b> {escape_html(header.get('tanggal', ''))}", styles["SmallCustom"]),
+        Paragraph(
+            f"<b>No. Transfer:</b> {escape_html(header.get('no_transfer') or '-')}",
+            styles["SmallCustom"]
+        ),
+        Paragraph(
+            f"<b>Tanggal:</b> {escape_html(header.get('tanggal') or '-')}",
+            styles["SmallCustom"]
+        ),
     ]
 
     info_table = Table([[left_info, right_info]], colWidths=[112 * mm, 68 * mm])
@@ -581,11 +581,9 @@ def build_pdf(df, header, diskon):
         ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
     ]))
     story.append(info_table)
-    story.append(Spacer(1, 12 * mm))
+    story.append(Spacer(1, 9 * mm))
 
-    # -----------------------------------------------------
     # TABEL PRODUK
-    # -----------------------------------------------------
     table_data = [[
         Paragraph("NO", styles["HeaderCustom"]),
         Paragraph("SKU", styles["HeaderCustom"]),
@@ -640,17 +638,14 @@ def build_pdf(df, header, diskon):
         ("FONTSIZE", (0, 0), (-1, -1), 7.5),
         ("LEFTPADDING", (0, 0), (-1, -1), 3),
         ("RIGHTPADDING", (0, 0), (-1, -1), 3),
-        ("TOPPADDING", (0, 0), (-1, -1), 5),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
     ]))
     story.append(product_table)
 
-    # -----------------------------------------------------
-    # TOTAL QTY TEPAT DI BAWAH KOLOM QTY
-    # Beri jarak sebelum bagian subtotal/diskon.
-    # -----------------------------------------------------
+    # TOTAL QTY: label ditempatkan pada sel pertama yang di-span agar tidak hilang.
     qty_summary = Table(
-        [["", "", "Total Qty", format_number(total_qty), "", "", ""]],
+        [["", "Total Qty", "", format_number(total_qty), "", "", ""]],
         colWidths=column_widths,
     )
     qty_summary.setStyle(TableStyle([
@@ -661,20 +656,18 @@ def build_pdf(df, header, diskon):
         ("FONTSIZE", (0, 0), (-1, -1), 8),
         ("LEFTPADDING", (0, 0), (-1, -1), 3),
         ("RIGHTPADDING", (0, 0), (-1, -1), 3),
-        ("TOPPADDING", (0, 0), (-1, -1), 2),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+        ("TOPPADDING", (0, 0), (-1, -1), 3),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
     ]))
     story.append(qty_summary)
     story.append(Spacer(1, 3 * mm))
 
-    # -----------------------------------------------------
-    # SUBTOTAL, DISKON, GRAND TOTAL (SEMUA FORMAT RUPIAH)
-    # Tidak menampilkan baris "Diskon Lainnya".
-    # -----------------------------------------------------
+    # RINGKASAN: baris Diskon Lainnya tetap ditampilkan (Rp0).
     grand_total = subtotal - total_diskon
     summary_data = [
         ["", "", "", "", "Sub Total", rupiah(subtotal)],
         ["", "", "", "", "Diskon", rupiah(total_diskon)],
+        ["", "", "", "", "Diskon Lainnya", rupiah(0)],
         ["", "", "", "", "Grand Total", rupiah(grand_total)],
     ]
     summary_widths = [8 * mm, 30 * mm, 61 * mm, 11 * mm, 36 * mm, 36 * mm]
@@ -684,27 +677,23 @@ def build_pdf(df, header, diskon):
         ("ALIGN", (4, 0), (4, -1), "RIGHT"),
         ("ALIGN", (5, 0), (5, -1), "RIGHT"),
         ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
-        ("FONTNAME", (4, 2), (5, 2), "Helvetica-Bold"),
+        ("FONTNAME", (4, 3), (5, 3), "Helvetica-Bold"),
         ("FONTSIZE", (0, 0), (-1, -1), 8),
-        ("LINEABOVE", (4, 2), (5, 2), 0.8, colors.black),
+        ("LINEABOVE", (4, 3), (5, 3), 0.8, colors.black),
         ("LEFTPADDING", (0, 0), (-1, -1), 3),
         ("RIGHTPADDING", (0, 0), (-1, -1), 3),
-        ("TOPPADDING", (0, 0), (-1, -1), 3),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+        ("TOPPADDING", (0, 0), (-1, -1), 2),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
     ]))
     story.append(summary_table)
+    story.append(Spacer(1, 5 * mm))
+
+    # CATATAN
+    story.append(Paragraph("<b>Catatan:</b>", styles["SmallCustom"]))
+    story.append(Paragraph(escape_html(header.get("catatan") or "-"), styles["SmallCustom"]))
     story.append(Spacer(1, 8 * mm))
 
-    # -----------------------------------------------------
-    # CATATAN
-    # -----------------------------------------------------
-    story.append(Paragraph("<b>Catatan:</b>", styles["SmallCustom"]))
-    story.append(Paragraph(escape_html(header.get("catatan", "")), styles["SmallCustom"]))
-    story.append(Spacer(1, 13 * mm))
-
-    # -----------------------------------------------------
-    # TIGA KOLOM TANDA TANGAN
-    # -----------------------------------------------------
+    # TIGA TANDA TANGAN
     signature_data = [[
         Paragraph("Diterima Oleh,", styles["SignatureHead"]),
         Paragraph("Dikirim Oleh,", styles["SignatureHead"]),
@@ -717,7 +706,7 @@ def build_pdf(df, header, diskon):
     signature_table = Table(
         signature_data,
         colWidths=[60 * mm, 60 * mm, 60 * mm],
-        rowHeights=[8 * mm, 17 * mm, 8 * mm],
+        rowHeights=[7 * mm, 13 * mm, 7 * mm],
     )
     signature_table.setStyle(TableStyle([
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
@@ -729,7 +718,7 @@ def build_pdf(df, header, diskon):
     ]))
     story.append(signature_table)
 
-    # Tanggal cetak tetap berada di bagian paling bawah halaman.
+    # Tanggal cetak di footer paling bawah.
     def draw_print_date(canvas, document):
         canvas.saveState()
         canvas.setFont("Helvetica", 8)

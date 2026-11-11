@@ -189,7 +189,6 @@ def format_percent(value):
 
 def escape_html(value):
     value = str(value or "-")
-
     return (
         value.replace("&", "&amp;")
         .replace("<", "&lt;")
@@ -203,17 +202,13 @@ def escape_html(value):
 
 @st.cache_data(show_spinner=False)
 def load_master_database(master_bytes):
-
     database = {}
 
     with pdfplumber.open(BytesIO(master_bytes)) as pdf:
-
         for page in pdf.pages:
-
             text = page.extract_text() or ""
 
             for line in text.splitlines():
-
                 tokens = line.split()
 
                 sku_position = next(
@@ -234,17 +229,10 @@ def load_master_database(master_bytes):
                     continue
 
                 sku = tokens[sku_position]
-
-                nama_produk = " ".join(
-                    tokens[2:sku_position]
-                ).strip()
-
-                harga = parse_price(
-                    tokens[sku_position + 1]
-                )
+                nama_produk = " ".join(tokens[2:sku_position]).strip()
+                harga = parse_price(tokens[sku_position + 1])
 
                 if sku and harga > 0:
-
                     database[sku] = {
                         "sku": sku,
                         "nama_produk": nama_produk,
@@ -259,7 +247,6 @@ def load_master_database(master_bytes):
 # =========================================================
 
 def extract_header(pdf_bytes):
-
     result = {
         "dari": "",
         "tujuan": "",
@@ -269,116 +256,89 @@ def extract_header(pdf_bytes):
     }
 
     with pdfplumber.open(BytesIO(pdf_bytes)) as pdf:
+        page_texts = [page.extract_text() or "" for page in pdf.pages]
+        text = "\n".join(page_texts)
 
-        text = "\n".join(
-            page.extract_text() or ""
-            for page in pdf.pages
-        )
+    clean_text = text.replace("\u00a0", " ")
+    flat_text = re.sub(r"\s+", " ", clean_text).strip()
 
-    lines = [
-        line.strip()
-        for line in text.splitlines()
-        if line.strip()
-    ]
-
-    # DARI
     match = re.search(
-        r"DARI\s*:\s*(.*?)(?=\s+No\.?\s*Transfer\b|\n|$)",
-        text,
+        r"\bDARI\s*:\s*(.*?)(?=\s+TUJUAN\s*:|\s+No\s*\.?\s*Transfer\s*:|\s+Tanggal\s*:|$)",
+        flat_text,
         re.IGNORECASE
     )
-
     if match:
         result["dari"] = match.group(1).strip()
 
-    # NOMOR TRANSFER
     match = re.search(
-        r"No\.?\s*Transfer\s*:\s*([A-Z0-9\-]+)",
-        text,
+        r"\bTUJUAN\s*:\s*(.*?)(?=\s+No\s*\.?\s*Transfer\s*:|\s+Tanggal\b\s*:?[ ]*\d{1,2}\b|\s+Catatan\s*:|\s+NO\s+SKU\b|$)",
+        flat_text,
         re.IGNORECASE
     )
+    if match:
+        result["tujuan"] = match.group(1).strip()
 
+    match = re.search(
+        r"\bNo\s*\.?\s*Transfer\s*:?\s*([A-Z0-9][A-Z0-9._/-]*)",
+        flat_text,
+        re.IGNORECASE
+    )
     if match:
         result["no_transfer"] = match.group(1).strip()
 
-    # TANGGAL
     match = re.search(
-        r"Tanggal\s*:\s*(\d{1,2}\s+[A-Za-z]{3,}\s+\d{4})",
-        text,
+        r"\bTanggal\s*:?\s*(\d{1,2}\s+[A-Za-z]{3,}\s+\d{4})",
+        flat_text,
         re.IGNORECASE
     )
-
     if match:
         result["tanggal"] = match.group(1).strip()
 
-    # TUJUAN
-    tujuan_parts = []
-    tujuan_started = False
+    if not result["no_transfer"]:
+        lines = clean_text.splitlines()
 
-    for line in lines:
+        for i, line in enumerate(lines):
+            if re.search(r"No\s*\.?\s*Transfer", line, re.IGNORECASE):
+                same_line = re.split(
+                    r"No\s*\.?\s*Transfer\s*:?",
+                    line,
+                    maxsplit=1,
+                    flags=re.IGNORECASE
+                )
+                candidate = same_line[1].strip() if len(same_line) > 1 else ""
 
-        if re.search(r"TUJUAN\s*:", line, re.IGNORECASE):
+                if not candidate and i + 1 < len(lines):
+                    candidate = lines[i + 1].strip()
 
-            tujuan_started = True
+                value = re.search(
+                    r"[A-Z0-9][A-Z0-9._/-]*",
+                    candidate,
+                    re.IGNORECASE
+                )
 
-            bagian = re.split(
-                r"TUJUAN\s*:",
-                line,
-                maxsplit=1,
-                flags=re.IGNORECASE
-            )[1]
+                if value:
+                    result["no_transfer"] = value.group(0)
 
-            bagian = re.sub(
-                r"\s+No\.?\s*Transfer.*$",
-                "",
-                bagian,
-                flags=re.IGNORECASE
-            )
-
-            bagian = re.sub(
-                r"\s+Tanggal\s*:.*$",
-                "",
-                bagian,
-                flags=re.IGNORECASE
-            )
-
-            if bagian.strip():
-                tujuan_parts.append(bagian.strip())
-
-            continue
-
-        if tujuan_started:
-
-            if re.search(
-                r"\bNO\s+SKU\b",
-                line,
-                re.IGNORECASE
-            ):
                 break
 
-            if re.match(
-                r"^(DARI|No\.?\s*Transfer|Tanggal)\b",
-                line,
-                re.IGNORECASE
-            ):
-                continue
+    for key in ("dari", "tujuan"):
+        result[key] = re.sub(
+            r"\s+(?:No\s*\.?\s*Transfer|Tanggal)\s*:.*$",
+            "",
+            result[key],
+            flags=re.IGNORECASE
+        ).strip()
 
-            tujuan_parts.append(line.strip())
-
-    result["tujuan"] = " ".join(tujuan_parts).strip()
-
-    # CATATAN
-    match = re.search(
+    note_match = re.search(
         r"Catatan\s*:\s*(.*?)(?=\n\s*Dicetak\s+tanggal|\Z)",
-        text,
+        clean_text,
         re.IGNORECASE | re.DOTALL
     )
 
-    if match:
-
+    if note_match:
         result["catatan"] = " ".join(
             line.strip()
-            for line in match.group(1).splitlines()
+            for line in note_match.group(1).splitlines()
             if line.strip()
         )
 
@@ -390,14 +350,11 @@ def extract_header(pdf_bytes):
 # =========================================================
 
 def extract_sku_qty(pdf_bytes):
-
     items = []
     errors = []
 
     with pdfplumber.open(BytesIO(pdf_bytes)) as pdf:
-
         for page_number, page in enumerate(pdf.pages, start=1):
-
             words = page.extract_words(
                 x_tolerance=2,
                 y_tolerance=2
@@ -409,7 +366,6 @@ def extract_sku_qty(pdf_bytes):
             ]
 
             for sku_word in sku_words:
-
                 sku = sku_word["text"]
                 sku_y = sku_word["top"]
 
@@ -421,12 +377,10 @@ def extract_sku_qty(pdf_bytes):
                 ]
 
                 if not qty_candidates:
-
                     errors.append(
                         f"QTY tidak ditemukan untuk SKU {sku} "
                         f"di halaman {page_number}."
                     )
-
                     continue
 
                 qty_word = min(
@@ -437,22 +391,16 @@ def extract_sku_qty(pdf_bytes):
                 qty = int(qty_word["text"])
 
                 if qty > 0:
-
                     items.append({
                         "sku": sku,
                         "qty": qty
                     })
 
-    # Gabungkan SKU yang sama
     combined = {}
 
     for item in items:
-
         sku = item["sku"]
-
-        combined[sku] = (
-            combined.get(sku, 0) + item["qty"]
-        )
+        combined[sku] = combined.get(sku, 0) + item["qty"]
 
     rows = [
         {"sku": sku, "qty": qty}
@@ -467,7 +415,6 @@ def extract_sku_qty(pdf_bytes):
 # =========================================================
 
 def build_pdf(df, header, diskon):
-
     output = BytesIO()
 
     doc = SimpleDocTemplate(
@@ -528,29 +475,20 @@ def build_pdf(df, header, diskon):
 
     story = []
 
-    # =====================================================
-    # HEADER: LOGO, JUDUL, NO. TRANSFER, DAN TANGGAL
-    # =====================================================
-
+    # HEADER: logo kiri, judul dan metadata kanan.
     if LOGO_FILE.exists():
-
         logo = RLImage(
             str(LOGO_FILE),
             width=39 * mm,
             height=15 * mm
         )
-
         logo.hAlign = "LEFT"
-
     else:
-
         logo = Paragraph(
             "<b>OXAR GLOBAL</b>",
             styles["SmallCustom"]
         )
 
-    # Judul dan metadata berada dalam satu kolom kanan.
-    # No. Transfer dan Tanggal rata kanan tepat di bawah SURAT JALAN.
     right_header = Table(
         [
             [Paragraph("SURAT JALAN", styles["TitleCustom"])],
@@ -576,15 +514,16 @@ def build_pdf(df, header, diskon):
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("ALIGN", (0, 0), (-1, -1), "RIGHT"),
         ("LEFTPADDING", (0, 0), (-1, -1), 0),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 2 * mm),
         ("TOPPADDING", (0, 0), (-1, -1), 0),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+        ("BOTTOMPADDING", (0, 0), (0, 0), 3 * mm),
     ]))
 
     header_top = Table(
         [[logo, right_header]],
         colWidths=[92 * mm, 88 * mm],
-        rowHeights=[27 * mm]
+        rowHeights=[29 * mm]
     )
 
     header_top.setStyle(TableStyle([
@@ -600,14 +539,8 @@ def build_pdf(df, header, diskon):
     story.append(header_top)
     story.append(Spacer(1, 3 * mm))
 
-    # DARI dan TUJUAN tetap berada di sisi kiri.
     lokasi_asal = (header.get("dari") or "").strip()
-
-    dari_text = (
-        f"OXAR {lokasi_asal}"
-        if lokasi_asal
-        else "OXAR"
-    )
+    dari_text = f"OXAR {lokasi_asal}" if lokasi_asal else "OXAR"
 
     left_info = [
         Paragraph(
@@ -638,10 +571,7 @@ def build_pdf(df, header, diskon):
     story.append(info_table)
     story.append(Spacer(1, 9 * mm))
 
-    # =====================================================
     # TABEL PRODUK
-    # =====================================================
-
     table_data = [[
         Paragraph("NO", styles["HeaderCustom"]),
         Paragraph("SKU", styles["HeaderCustom"]),
@@ -657,21 +587,14 @@ def build_pdf(df, header, diskon):
     total_qty = 0
 
     for index, row in df.reset_index(drop=True).iterrows():
-
         sku = str(row["SKU"])
         nama = str(row["NAMA BARANG"])
         qty = int(row["QTY"])
         harga = int(row["HARGA (UNIT)"])
 
         nilai_subtotal = qty * harga
-
-        nilai_diskon = (
-            nilai_subtotal * float(diskon) / 100
-        )
-
-        harga_setelah_diskon = (
-            nilai_subtotal - nilai_diskon
-        )
+        nilai_diskon = nilai_subtotal * float(diskon) / 100
+        harga_setelah_diskon = nilai_subtotal - nilai_diskon
 
         subtotal += nilai_subtotal
         total_diskon += nilai_diskon
@@ -680,10 +603,7 @@ def build_pdf(df, header, diskon):
         table_data.append([
             str(index + 1),
             sku,
-            Paragraph(
-                escape_html(nama),
-                styles["ProductCustom"]
-            ),
+            Paragraph(escape_html(nama), styles["ProductCustom"]),
             format_number(qty),
             rupiah(harga),
             format_percent(diskon),
@@ -726,10 +646,7 @@ def build_pdf(df, header, diskon):
 
     story.append(product_table)
 
-    # =====================================================
     # TOTAL QTY
-    # =====================================================
-
     qty_summary = Table(
         [[
             "",
@@ -756,13 +673,9 @@ def build_pdf(df, header, diskon):
     ]))
 
     story.append(qty_summary)
-
     story.append(Spacer(1, 3 * mm))
 
-    # =====================================================
-    # RINGKASAN PERHITUNGAN
-    # =====================================================
-
+    # RINGKASAN
     grand_total = subtotal - total_diskon
 
     summary_data = [
@@ -801,18 +714,11 @@ def build_pdf(df, header, diskon):
     ]))
 
     story.append(summary_table)
-
     story.append(Spacer(1, 5 * mm))
 
-    # =====================================================
     # CATATAN
-    # =====================================================
-
     story.append(
-        Paragraph(
-            "<b>Catatan:</b>",
-            styles["SmallCustom"]
-        )
+        Paragraph("<b>Catatan:</b>", styles["SmallCustom"])
     )
 
     story.append(
@@ -822,13 +728,8 @@ def build_pdf(df, header, diskon):
         )
     )
 
-    # =====================================================
     # TANDA TANGAN DAN TANGGAL CETAK
-    # DIGAMBAR DI BAGIAN BAWAH HALAMAN
-    # =====================================================
-
     def draw_print_date(canvas, document):
-
         canvas.saveState()
 
         page_width, page_height = A4
@@ -845,43 +746,25 @@ def build_pdf(df, header, diskon):
             "Hormat Kami,"
         ]
 
-        # JUDUL TANDA TANGAN
-        canvas.setFont(
-            "Helvetica-Bold",
-            8.5
-        )
+        canvas.setFont("Helvetica-Bold", 8.5)
 
         for x, heading in zip(centers, headings):
-
             canvas.drawCentredString(
                 x,
                 32 * mm,
                 heading
             )
 
-        # TEMPAT TANDA TANGAN
-        canvas.setFont(
-            "Helvetica",
-            8
-        )
+        canvas.setFont("Helvetica", 8)
 
         for x in centers:
-
             canvas.drawCentredString(
                 x,
                 16 * mm,
                 "( .................................... )"
             )
 
-        # TANGGAL CETAK PALING BAWAH
-        canvas.setFont(
-            "Helvetica",
-            8
-        )
-
-        canvas.setFillColor(
-            colors.HexColor("#333333")
-        )
+        canvas.setFillColor(colors.HexColor("#333333"))
 
         canvas.drawString(
             13 * mm,
@@ -899,7 +782,6 @@ def build_pdf(df, header, diskon):
     )
 
     output.seek(0)
-
     return output.getvalue()
 
 
@@ -908,26 +790,18 @@ def build_pdf(df, header, diskon):
 # =========================================================
 
 if not MASTER_PDF.exists():
-
     st.error(
         "Database harga tidak ditemukan. "
         "Pastikan Data Harga - Google Spreadsheet.pdf "
         "berada di repository GitHub."
     )
-
     st.stop()
 
-
-master_db = load_master_database(
-    MASTER_PDF.read_bytes()
-)
+master_db = load_master_database(MASTER_PDF.read_bytes())
 
 if not master_db:
-
     st.error("Database SKU tidak berhasil dibaca.")
-
     st.stop()
-
 
 st.success(
     f"Database harga aktif: {len(master_db):,} SKU."
@@ -959,18 +833,14 @@ if uploaded_file:
     items, errors = extract_sku_qty(pdf_bytes)
 
     for error in errors:
-
         st.warning(error)
 
     if not items:
-
         st.error(
             "SKU dan QTY tidak berhasil dibaca dari PDF."
         )
-
         st.stop()
 
-    # CEK SKU MASTER
     missing_skus = [
         item["sku"]
         for item in items
@@ -978,19 +848,13 @@ if uploaded_file:
     ]
 
     if missing_skus:
-
         st.error(
             "SKU berikut tidak ditemukan di database harga:"
         )
-
         st.code("\n".join(missing_skus))
-
         st.stop()
 
-    # =====================================================
     # INFORMASI SURAT JALAN
-    # =====================================================
-
     st.markdown(
         '<div class="section-title">2. Informasi Surat Jalan</div>',
         unsafe_allow_html=True
@@ -999,7 +863,6 @@ if uploaded_file:
     col1, col2 = st.columns(2)
 
     with col1:
-
         st.text_input(
             "DARI",
             value=header["dari"] or "Tidak terbaca",
@@ -1014,7 +877,6 @@ if uploaded_file:
         )
 
     with col2:
-
         st.text_input(
             "No. Transfer",
             value=header["no_transfer"] or "Tidak terbaca",
@@ -1034,10 +896,7 @@ if uploaded_file:
             height=60
         )
 
-    # =====================================================
     # SATU INPUT DISKON
-    # =====================================================
-
     st.markdown(
         '<div class="section-title">3. Pengaturan Diskon</div>',
         unsafe_allow_html=True
@@ -1069,36 +928,23 @@ if uploaded_file:
         f"Diskon aktif untuk semua produk: {format_percent(diskon)}"
     )
 
-    # =====================================================
     # DATA PRODUK
-    # =====================================================
-
     product_data = []
 
     for item in items:
-
         product = master_db[item["sku"]]
 
         product_data.append({
-
             "SKU": item["sku"],
-
             "NAMA BARANG": product["nama_produk"],
-
             "QTY": item["qty"],
-
             "HARGA (UNIT)": product["harga"],
-
             "DISKON (%)": diskon
-
         })
 
     df = pd.DataFrame(product_data)
 
-    # =====================================================
     # PREVIEW PERHITUNGAN
-    # =====================================================
-
     st.markdown(
         '<div class="section-title">4. Preview Produk dan Perhitungan</div>',
         unsafe_allow_html=True
@@ -1120,25 +966,11 @@ if uploaded_file:
 
     display_df = preview.copy()
 
-    display_df["HARGA (UNIT)"] = (
-        display_df["HARGA (UNIT)"].map(rupiah)
-    )
-
-    display_df["DISKON (%)"] = (
-        display_df["DISKON (%)"].map(format_percent)
-    )
-
-    display_df["SUBTOTAL"] = (
-        display_df["SUBTOTAL"].map(rupiah)
-    )
-
-    display_df["NILAI DISKON"] = (
-        display_df["NILAI DISKON"].map(rupiah)
-    )
-
-    display_df["HARGA SETELAH DISKON"] = (
-        display_df["HARGA SETELAH DISKON"].map(rupiah)
-    )
+    display_df["HARGA (UNIT)"] = display_df["HARGA (UNIT)"].map(rupiah)
+    display_df["DISKON (%)"] = display_df["DISKON (%)"].map(format_percent)
+    display_df["SUBTOTAL"] = display_df["SUBTOTAL"].map(rupiah)
+    display_df["NILAI DISKON"] = display_df["NILAI DISKON"].map(rupiah)
+    display_df["HARGA SETELAH DISKON"] = display_df["HARGA SETELAH DISKON"].map(rupiah)
 
     st.dataframe(
         display_df,
@@ -1146,20 +978,10 @@ if uploaded_file:
         hide_index=True
     )
 
-    # =====================================================
     # RINGKASAN METRIC
-    # =====================================================
-
     total_qty = int(preview["QTY"].sum())
-
-    subtotal = float(
-        preview["SUBTOTAL"].sum()
-    )
-
-    total_diskon = float(
-        preview["NILAI DISKON"].sum()
-    )
-
+    subtotal = float(preview["SUBTOTAL"].sum())
+    total_diskon = float(preview["NILAI DISKON"].sum())
     grand_total = subtotal - total_diskon
 
     st.markdown(
@@ -1169,30 +991,12 @@ if uploaded_file:
 
     col1, col2, col3, col4 = st.columns(4)
 
-    col1.metric(
-        "Total Qty",
-        format_number(total_qty)
-    )
+    col1.metric("Total Qty", format_number(total_qty))
+    col2.metric("Sub Total", rupiah(subtotal))
+    col3.metric("Total Diskon", rupiah(total_diskon))
+    col4.metric("Grand Total", rupiah(grand_total))
 
-    col2.metric(
-        "Sub Total",
-        rupiah(subtotal)
-    )
-
-    col3.metric(
-        "Total Diskon",
-        rupiah(total_diskon)
-    )
-
-    col4.metric(
-        "Grand Total",
-        rupiah(grand_total)
-    )
-
-    # =====================================================
     # GENERATE PDF
-    # =====================================================
-
     st.markdown(
         '<div class="section-title">6. Generate PDF Surat Jalan</div>',
         unsafe_allow_html=True
@@ -1205,19 +1009,16 @@ if uploaded_file:
     ):
 
         if not header["dari"]:
-
             st.error(
                 "Informasi DARI tidak terbaca dari PDF."
             )
 
         elif not header["tujuan"]:
-
             st.error(
                 "Informasi TUJUAN tidak terbaca dari PDF."
             )
 
         else:
-
             pdf_output = build_pdf(
                 df,
                 header,
@@ -1240,12 +1041,8 @@ if uploaded_file:
                 "PDF SURAT JALAN berhasil dibuat!"
             )
 
-    # =====================================================
     # DOWNLOAD PDF
-    # =====================================================
-
     if "pdf_surat_jalan" in st.session_state:
-
         st.download_button(
             label="DOWNLOAD PDF SURAT JALAN",
             data=st.session_state["pdf_surat_jalan"],
@@ -1256,7 +1053,6 @@ if uploaded_file:
         )
 
 else:
-
     st.info(
         "Silakan upload PDF Surat Jalan. "
         "Sistem akan membaca informasi, SKU, dan QTY secara otomatis."

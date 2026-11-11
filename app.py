@@ -506,7 +506,11 @@ def build_pdf(df, header, diskon):
     ))
     styles.add(ParagraphStyle(
         name="TitleCustom", fontName="Helvetica-Bold", fontSize=21,
-        leading=24, alignment=TA_RIGHT, textColor=colors.black
+        leading=25, alignment=TA_RIGHT, textColor=colors.black
+    ))
+    styles.add(ParagraphStyle(
+        name="MetadataRight", fontName="Helvetica", fontSize=8.5,
+        leading=11, alignment=TA_RIGHT, textColor=colors.black
     ))
     styles.add(ParagraphStyle(
         name="ProductCustom", fontName="Helvetica", fontSize=7.5,
@@ -534,13 +538,38 @@ def build_pdf(df, header, diskon):
     else:
         logo = Paragraph("<b>OXAR GLOBAL</b>", styles["SmallCustom"])
 
+    # BLOK KANAN: JUDUL, NO. TRANSFER, DAN TANGGAL
+    # Ketiganya berada dalam satu kolom dan rata kanan.
+    right_header = Table(
+        [
+            [Paragraph("SURAT JALAN", styles["TitleCustom"])],
+            [Paragraph(
+                f"<b>No. Transfer:</b> {escape_html(header.get('no_transfer') or '-')}",
+                styles["MetadataRight"]
+            )],
+            [Paragraph(
+                f"<b>Tanggal:</b> {escape_html(header.get('tanggal') or '-')}",
+                styles["MetadataRight"]
+            )],
+        ],
+        colWidths=[88 * mm],
+    )
+    right_header.setStyle(TableStyle([
+        ("ALIGN", (0, 0), (-1, -1), "RIGHT"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        ("TOPPADDING", (0, 0), (-1, -1), 0),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 1),
+    ]))
+
     header_table = Table(
-        [[logo, Paragraph("SURAT JALAN", styles["TitleCustom"])]],
+        [[logo, right_header]],
         colWidths=[92 * mm, 88 * mm],
-        rowHeights=[19 * mm],
+        rowHeights=[27 * mm],
     )
     header_table.setStyle(TableStyle([
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("ALIGN", (0, 0), (0, 0), "LEFT"),
         ("ALIGN", (1, 0), (1, 0), "RIGHT"),
         ("LEFTPADDING", (0, 0), (-1, -1), 0),
@@ -551,30 +580,28 @@ def build_pdf(df, header, diskon):
     story.append(header_table)
     story.append(Spacer(1, 5 * mm))
 
-    # DARI, TUJUAN, NOMOR TRANSFER, TANGGAL
+    # DARI DAN TUJUAN tetap di sisi kiri di bawah logo.
     lokasi_asal = (header.get("dari") or "").strip()
     dari_text = f"OXAR {lokasi_asal}" if lokasi_asal else "OXAR"
 
     left_info = [
-        Paragraph(f"<b>DARI:</b> {escape_html(dari_text)}", styles["SmallCustom"]),
-        Spacer(1, 2 * mm),
-        Paragraph(f"<b>TUJUAN:</b> {escape_html(header.get('tujuan') or '-')}", styles["SmallCustom"]),
-    ]
-    right_info = [
         Paragraph(
-            f"<b>No. Transfer:</b> {escape_html(header.get('no_transfer') or '-')}",
+            f"<b>DARI:</b> {escape_html(dari_text)}",
             styles["SmallCustom"]
         ),
+        Spacer(1, 2 * mm),
         Paragraph(
-            f"<b>Tanggal:</b> {escape_html(header.get('tanggal') or '-')}",
+            f"<b>TUJUAN:</b> {escape_html(header.get('tujuan') or '-')}",
             styles["SmallCustom"]
         ),
     ]
 
-    info_table = Table([[left_info, right_info]], colWidths=[112 * mm, 68 * mm])
+    info_table = Table(
+        [[left_info, ""]],
+        colWidths=[112 * mm, 68 * mm]
+    )
     info_table.setStyle(TableStyle([
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("ALIGN", (1, 0), (1, 0), "LEFT"),
         ("LEFTPADDING", (0, 0), (-1, -1), 0),
         ("RIGHTPADDING", (0, 0), (-1, -1), 0),
         ("TOPPADDING", (0, 0), (-1, -1), 0),

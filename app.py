@@ -259,33 +259,21 @@ def extract_header(pdf_bytes):
         page_texts = [page.extract_text() or "" for page in pdf.pages]
         text = "\n".join(page_texts)
 
+        # Ambil posisi teks pada halaman pertama agar kolom kiri
+        # (DARI/TUJUAN) tidak tercampur dengan kolom kanan
+        # (No. Transfer/Tanggal).
+        first_page = pdf.pages[0]
+        words = first_page.extract_words(
+            x_tolerance=2,
+            y_tolerance=2,
+            keep_blank_chars=False
+        )
+        page_width = first_page.width
+
     clean_text = text.replace("\u00a0", " ")
     flat_text = re.sub(r"\s+", " ", clean_text).strip()
 
-    # Ambil nilai DARI sampai label berikutnya.
-    # Ini mencegah No. Transfer/Tanggal ikut masuk ke dalam nilai DARI.
-    dari_match = re.search(
-        r"\bDARI\s*:\s*(.*?)"
-        r"(?=\s+\bTUJUAN\s*:|\s+\bNo\s*\.?\s*Transfer\b"
-        r"|\s+\bTanggal\b\s*:|\s+\bCatatan\s*:|\s+\bNO\s+SKU\b|$)",
-        flat_text,
-        re.IGNORECASE
-    )
-    if dari_match:
-        result["dari"] = dari_match.group(1).strip()
-
-    # Ambil TUJUAN secara terpisah agar tidak tercampur metadata.
-    tujuan_match = re.search(
-        r"\bTUJUAN\s*:\s*(.*?)"
-        r"(?=\s+\bNo\s*\.?\s*Transfer\b|\s+\bTanggal\b\s*:?"
-        r"|\s+\bCatatan\s*:|\s+\bNO\s+SKU\b|$)",
-        flat_text,
-        re.IGNORECASE
-    )
-    if tujuan_match:
-        result["tujuan"] = tujuan_match.group(1).strip()
-
-    # Nomor transfer dapat memiliki tanda hubung.
+    # Ekstraksi nomor transfer dan tanggal dari teks dokumen.
     transfer_match = re.search(
         r"\bNo\s*\.?\s*Transfer\s*:?\s*([A-Z0-9][A-Z0-9._/-]*)",
         flat_text,
@@ -294,7 +282,6 @@ def extract_header(pdf_bytes):
     if transfer_match:
         result["no_transfer"] = transfer_match.group(1).strip()
 
-    # Tanggal dokumen.
     tanggal_match = re.search(
         r"\bTanggal\s*:?\s*(\d{1,2}\s+[A-Za-z]{3,}\s+\d{4})",
         flat_text,
@@ -303,7 +290,126 @@ def extract_header(pdf_bytes):
     if tanggal_match:
         result["tanggal"] = tanggal_match.group(1).strip()
 
-    # Fallback untuk PDF yang memecah label dan nilainya ke baris berbeda.
+    # Kelompokkan kata berdasarkan baris PDF.
+    line_groups = []
+    for word in sorted(words, key=lambda item: (item["top"], item["x0"])):
+        placed = False
+        for line in line_groups:
+            if abs(line["top"] - word["top"]) <= 2.5:
+                line["words"].append(word)
+                placed = True
+                break
+        if not placed:
+            line_groups.append({
+                "top": word["top"],
+                "words": [word]
+            })
+
+    for line in line_groups:
+        line["words"].sort(key=lambda item: item["x0"])
+        line["text"] = " ".join(item["text"] for item in line["words"])
+
+    # Cari awal tabel agar teks produk tidak ikut dianggap sebagai tujuan.
+    table_top = min(
+        (
+            line["top"] for line in line_groups
+            if re.search(r"\bNO\b", line["text"], re.IGNORECASE)
+            and re.search(r"\bSKU\b", line["text"], re.IGNORECASE)
+        ),
+        default=float("inf")
+    )
+
+    left_limit = page_width * 0.56
+    left_lines = []
+    for line in line_groups:
+        if line["top"] >= table_top:
+            continue
+        left_words = [
+            word for word in line["words"]
+            if word["x0"] < left_limit
+        ]
+        if left_words:
+            left_lines.append({
+                "top": line["top"],
+                "words": left_words,
+                "text": " ".join(word["text"] for word in left_words)
+            })
+
+    # DARI: hanya ambil isi pada kolom kiri di baris DARI.
+    dari_line_index = None
+    for i, line in enumerate(left_lines):
+        if re.search(r"^\s*DARI\b", line["text"], re.IGNORECASE):
+            dari_line_index = i
+            match = re.search(
+                r"\bDARI\b\s*:?\s*(.*)$",
+                line["text"],
+                re.IGNORECASE
+            )
+            if match:
+                result["dari"] = match.group(1).strip(" :")
+            break
+
+    # TUJUAN: ambil isi di kolom kiri, termasuk baris lanjutan
+    # seperti "Princess Cosmetic" dan "Kayutangi".
+    tujuan_line_index = None
+    tujuan_top = None
+    for i, line in enumerate(left_lines):
+        if re.search(r"^\s*TUJUAN\b", line["text"], re.IGNORECASE):
+            tujuan_line_index = i
+            tujuan_top = line["top"]
+            break
+
+    if tujuan_line_index is not None:
+        tujuan_parts = []
+        for line in left_lines[tujuan_line_index:]:
+            if line["top"] >= table_top:
+                break
+
+            line_text = line["text"].strip()
+
+            if line["top"] == tujuan_top or abs(line["top"] - tujuan_top) <= 2.5:
+                match = re.search(
+                    r"\bTUJUAN\b\s*:?\s*(.*)$",
+                    line_text,
+                    re.IGNORECASE
+                )
+                if match and match.group(1).strip():
+                    tujuan_parts.append(match.group(1).strip())
+            else:
+                # Lewati baris label lain; ambil baris lanjutan tujuan.
+                if re.match(
+                    r"^(DARI|No\.?|Transfer|Tanggal|Catatan|NO|SKU)\b",
+                    line_text,
+                    re.IGNORECASE
+                ):
+                    break
+                tujuan_parts.append(line_text)
+
+        result["tujuan"] = " ".join(tujuan_parts).strip()
+
+    # Fallback jika PDF tidak menyediakan posisi kata yang memadai.
+    if not result["dari"]:
+        dari_match = re.search(
+            r"\bDARI\s*:\s*(.*?)"
+            r"(?=\s+\bTUJUAN\s*:|\s+\bNo\s*\.?\s*Transfer\b"
+            r"|\s+\bTanggal\b\s*:|\s+\bCatatan\s*:|\s+\bNO\s+SKU\b|$)",
+            flat_text,
+            re.IGNORECASE
+        )
+        if dari_match:
+            result["dari"] = dari_match.group(1).strip()
+
+    if not result["tujuan"]:
+        tujuan_match = re.search(
+            r"\bTUJUAN\s*:\s*(.*?)"
+            r"(?=\s+\bCatatan\s*:|\s+\bNO\s+SKU\b|$)",
+            flat_text,
+            re.IGNORECASE
+        )
+        if tujuan_match:
+            result["tujuan"] = tujuan_match.group(1).strip()
+
+    # Fallback nomor transfer untuk PDF yang memecah label dan nilai.
     if not result["no_transfer"]:
         lines = [line.strip() for line in clean_text.splitlines() if line.strip()]
         for i, line in enumerate(lines):
@@ -317,7 +423,6 @@ def extract_header(pdf_bytes):
                 candidate = parts[1].strip() if len(parts) > 1 else ""
                 if not candidate and i + 1 < len(lines):
                     candidate = lines[i + 1]
-
                 value_match = re.search(
                     r"[A-Z0-9][A-Z0-9._/-]*",
                     candidate,
@@ -327,16 +432,15 @@ def extract_header(pdf_bytes):
                     result["no_transfer"] = value_match.group(0).strip()
                 break
 
-    # Bersihkan sisa label jika ekstraksi PDF menempelkan beberapa kolom.
-    for key in ("dari", "tujuan"):
-        result[key] = re.sub(
-            r"\s+(?:No\s*\.?\s*Transfer|Tanggal|Catatan)\b.*$",
-            "",
-            result[key],
-            flags=re.IGNORECASE
-        ).strip(" :\t-")
+    # Bersihkan metadata yang mungkin ikut terbaca pada DARI saja.
+    result["dari"] = re.sub(
+        r"\s+(?:No\s*\.?\s*Transfer|Tanggal|Catatan)\b.*$",
+        "",
+        result["dari"],
+        flags=re.IGNORECASE
+    ).strip(" :\t-")
 
-    # Catatan, jika tersedia.
+    # Catatan.
     note_match = re.search(
         r"Catatan\s*:\s*(.*?)(?=\n\s*Dicetak\s+tanggal|\Z)",
         clean_text,
@@ -489,37 +593,13 @@ def build_pdf(df, header, diskon):
     else:
         logo = Paragraph("<b>OXAR GLOBAL</b>", styles["SmallCustom"])
 
-    # JUDUL, NOMOR TRANSFER, DAN TANGGAL DALAM SATU KOLOM KANAN.
-    # Jarak judul ke metadata dibuat cukup, tetapi tidak terlalu renggang.
-    right_header = Table(
-        [
-            [Paragraph("SURAT JALAN", styles["TitleCustom"])],
-            [Paragraph(
-                f"<b>No. Transfer:</b> {escape_html(header.get('no_transfer') or '-')}",
-                styles["MetadataRight"]
-            )],
-            [Paragraph(
-                f"<b>Tanggal:</b> {escape_html(header.get('tanggal') or '-')}",
-                styles["MetadataRight"]
-            )],
-        ],
-        colWidths=[88 * mm]
-    )
-    right_header.setStyle(TableStyle([
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("ALIGN", (0, 0), (-1, -1), "RIGHT"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 0),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
-        ("TOPPADDING", (0, 0), (-1, -1), 0),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
-        ("BOTTOMPADDING", (0, 0), (0, 0), 3 * mm),
-        ("BOTTOMPADDING", (0, 1), (0, 1), 1 * mm),
-    ]))
+    # JUDUL SURAT JALAN DI BAGIAN KANAN ATAS.
+    title_right = Paragraph("SURAT JALAN", styles["TitleCustom"])
 
     header_top = Table(
-        [[logo, right_header]],
+        [[logo, title_right]],
         colWidths=[92 * mm, 88 * mm],
-        rowHeights=[29 * mm]
+        rowHeights=[22 * mm]
     )
     header_top.setStyle(TableStyle([
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
@@ -531,10 +611,10 @@ def build_pdf(df, header, diskon):
         ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
     ]))
     story.append(header_top)
-    story.append(Spacer(1, 3 * mm))
+    story.append(Spacer(1, 2 * mm))
 
-    # DARI hanya "OXAR + lokasi"; hilangkan awalan OXAR jika sudah ada
-    # agar tidak menjadi "OXAR OXAR ..." dan cegah metadata ikut tercetak.
+    # INFORMASI KIRI DAN KANAN DIMULAI PADA GARIS YANG SAMA.
+    # DARI sejajar dengan No. Transfer; TUJUAN sejajar dengan Tanggal.
     lokasi_asal = (header.get("dari") or "").strip()
     lokasi_asal = re.sub(
         r"^\s*OXAR\s*",
@@ -555,20 +635,33 @@ def build_pdf(df, header, diskon):
             f"<b>DARI:</b> {escape_html(dari_text)}",
             styles["SmallCustom"]
         ),
-        Spacer(1, 2 * mm),
+        Spacer(1, 1.5 * mm),
         Paragraph(
             f"<b>TUJUAN:</b> {escape_html(header.get('tujuan') or '-')}",
             styles["SmallCustom"]
         ),
     ]
 
+    right_info = [
+        Paragraph(
+            f"<b>No. Transfer:</b> {escape_html(header.get('no_transfer') or '-')}",
+            styles["MetadataRight"]
+        ),
+        Spacer(1, 1.5 * mm),
+        Paragraph(
+            f"<b>Tanggal:</b> {escape_html(header.get('tanggal') or '-')}",
+            styles["MetadataRight"]
+        ),
+    ]
+
     info_table = Table(
-        [[left_info, ""]],
+        [[left_info, right_info]],
         colWidths=[92 * mm, 88 * mm]
     )
     info_table.setStyle(TableStyle([
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("ALIGN", (0, 0), (0, 0), "LEFT"),
+        ("ALIGN", (1, 0), (1, 0), "RIGHT"),
         ("LEFTPADDING", (0, 0), (-1, -1), 0),
         ("RIGHTPADDING", (0, 0), (-1, -1), 0),
         ("TOPPADDING", (0, 0), (-1, -1), 0),

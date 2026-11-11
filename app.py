@@ -476,7 +476,7 @@ def build_pdf(df, header, diskon):
         leftMargin=13 * mm,
         rightMargin=13 * mm,
         topMargin=9 * mm,
-        bottomMargin=65 * mm,
+        bottomMargin=45 * mm,
         title="Surat Jalan OXAR GLOBAL",
         author="OXAR GLOBAL",
     )
@@ -501,6 +501,15 @@ def build_pdf(df, header, diskon):
     ))
 
     styles.add(ParagraphStyle(
+        name="MetadataRight",
+        fontName="Helvetica",
+        fontSize=8.5,
+        leading=11,
+        alignment=TA_RIGHT,
+        textColor=colors.black
+    ))
+
+    styles.add(ParagraphStyle(
         name="ProductCustom",
         fontName="Helvetica",
         fontSize=7.5,
@@ -520,7 +529,7 @@ def build_pdf(df, header, diskon):
     story = []
 
     # =====================================================
-    # HEADER: LOGO DAN SURAT JALAN
+    # HEADER: LOGO, JUDUL, NO. TRANSFER, DAN TANGGAL
     # =====================================================
 
     if LOGO_FILE.exists():
@@ -540,15 +549,42 @@ def build_pdf(df, header, diskon):
             styles["SmallCustom"]
         )
 
-    title_header = Paragraph(
-        "SURAT JALAN",
-        styles["TitleCustom"]
+    # Judul dan metadata berada dalam satu kolom kanan.
+    # No. Transfer dan Tanggal rata kanan tepat di bawah SURAT JALAN.
+    right_header = Table(
+        [
+            [Paragraph("SURAT JALAN", styles["TitleCustom"])],
+            [
+                Paragraph(
+                    f"<b>No. Transfer:</b> "
+                    f"{escape_html(header.get('no_transfer') or '-')}",
+                    styles["MetadataRight"]
+                )
+            ],
+            [
+                Paragraph(
+                    f"<b>Tanggal:</b> "
+                    f"{escape_html(header.get('tanggal') or '-')}",
+                    styles["MetadataRight"]
+                )
+            ],
+        ],
+        colWidths=[88 * mm]
     )
 
+    right_header.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("ALIGN", (0, 0), (-1, -1), "RIGHT"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        ("TOPPADDING", (0, 0), (-1, -1), 0),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+    ]))
+
     header_top = Table(
-        [[logo, title_header]],
+        [[logo, right_header]],
         colWidths=[92 * mm, 88 * mm],
-        rowHeights=[22 * mm]
+        rowHeights=[27 * mm]
     )
 
     header_top.setStyle(TableStyle([
@@ -562,12 +598,9 @@ def build_pdf(df, header, diskon):
     ]))
 
     story.append(header_top)
+    story.append(Spacer(1, 3 * mm))
 
-    # =====================================================
-    # INFORMASI DARI DAN TUJUAN
-    # SEJAJAR DENGAN NO TRANSFER DAN TANGGAL
-    # =====================================================
-
+    # DARI dan TUJUAN tetap berada di sisi kiri.
     lokasi_asal = (header.get("dari") or "").strip()
 
     dari_text = (
@@ -581,37 +614,21 @@ def build_pdf(df, header, diskon):
             f"<b>DARI:</b> {escape_html(dari_text)}",
             styles["SmallCustom"]
         ),
-
         Spacer(1, 2 * mm),
-
         Paragraph(
             f"<b>TUJUAN:</b> {escape_html(header.get('tujuan') or '-')}",
             styles["SmallCustom"]
         ),
     ]
 
-    right_info = [
-        Paragraph(
-            f"<b>No. Transfer:</b> {escape_html(header.get('no_transfer') or '-')}",
-            styles["SmallCustom"]
-        ),
-
-        Spacer(1, 2 * mm),
-
-        Paragraph(
-            f"<b>Tanggal:</b> {escape_html(header.get('tanggal') or '-')}",
-            styles["SmallCustom"]
-        ),
-    ]
-
     info_table = Table(
-        [[left_info, right_info]],
+        [[left_info, ""]],
         colWidths=[92 * mm, 88 * mm]
     )
 
     info_table.setStyle(TableStyle([
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("ALIGN", (0, 0), (-1, -1), "LEFT"),
+        ("ALIGN", (0, 0), (0, 0), "LEFT"),
         ("LEFTPADDING", (0, 0), (-1, -1), 0),
         ("RIGHTPADDING", (0, 0), (-1, -1), 0),
         ("TOPPADDING", (0, 0), (-1, -1), 0),
@@ -619,7 +636,6 @@ def build_pdf(df, header, diskon):
     ]))
 
     story.append(info_table)
-
     story.append(Spacer(1, 9 * mm))
 
     # =====================================================
@@ -839,7 +855,7 @@ def build_pdf(df, header, diskon):
 
             canvas.drawCentredString(
                 x,
-                48 * mm,
+                32 * mm,
                 heading
             )
 
@@ -853,7 +869,7 @@ def build_pdf(df, header, diskon):
 
             canvas.drawCentredString(
                 x,
-                24 * mm,
+                16 * mm,
                 "( .................................... )"
             )
 
@@ -869,7 +885,7 @@ def build_pdf(df, header, diskon):
 
         canvas.drawString(
             13 * mm,
-            9 * mm,
+            7 * mm,
             "Dicetak tanggal : "
             + datetime.now().strftime("%d %b %Y %H:%M")
         )

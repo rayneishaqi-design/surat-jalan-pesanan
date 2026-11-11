@@ -262,79 +262,86 @@ def extract_header(pdf_bytes):
     clean_text = text.replace("\u00a0", " ")
     flat_text = re.sub(r"\s+", " ", clean_text).strip()
 
-    match = re.search(
-        r"\bDARI\s*:\s*(.*?)(?=\s+TUJUAN\s*:|\s+No\s*\.?\s*Transfer\s*:|\s+Tanggal\s*:|$)",
+    # Ambil nilai DARI sampai label berikutnya.
+    # Ini mencegah No. Transfer/Tanggal ikut masuk ke dalam nilai DARI.
+    dari_match = re.search(
+        r"\bDARI\s*:\s*(.*?)"
+        r"(?=\s+\bTUJUAN\s*:|\s+\bNo\s*\.?\s*Transfer\b"
+        r"|\s+\bTanggal\b\s*:|\s+\bCatatan\s*:|\s+\bNO\s+SKU\b|$)",
         flat_text,
         re.IGNORECASE
     )
-    if match:
-        result["dari"] = match.group(1).strip()
+    if dari_match:
+        result["dari"] = dari_match.group(1).strip()
 
-    match = re.search(
-        r"\bTUJUAN\s*:\s*(.*?)(?=\s+No\s*\.?\s*Transfer\s*:|\s+Tanggal\b\s*:?[ ]*\d{1,2}\b|\s+Catatan\s*:|\s+NO\s+SKU\b|$)",
+    # Ambil TUJUAN secara terpisah agar tidak tercampur metadata.
+    tujuan_match = re.search(
+        r"\bTUJUAN\s*:\s*(.*?)"
+        r"(?=\s+\bNo\s*\.?\s*Transfer\b|\s+\bTanggal\b\s*:?"
+        r"|\s+\bCatatan\s*:|\s+\bNO\s+SKU\b|$)",
         flat_text,
         re.IGNORECASE
     )
-    if match:
-        result["tujuan"] = match.group(1).strip()
+    if tujuan_match:
+        result["tujuan"] = tujuan_match.group(1).strip()
 
-    match = re.search(
+    # Nomor transfer dapat memiliki tanda hubung.
+    transfer_match = re.search(
         r"\bNo\s*\.?\s*Transfer\s*:?\s*([A-Z0-9][A-Z0-9._/-]*)",
         flat_text,
         re.IGNORECASE
     )
-    if match:
-        result["no_transfer"] = match.group(1).strip()
+    if transfer_match:
+        result["no_transfer"] = transfer_match.group(1).strip()
 
-    match = re.search(
+    # Tanggal dokumen.
+    tanggal_match = re.search(
         r"\bTanggal\s*:?\s*(\d{1,2}\s+[A-Za-z]{3,}\s+\d{4})",
         flat_text,
         re.IGNORECASE
     )
-    if match:
-        result["tanggal"] = match.group(1).strip()
+    if tanggal_match:
+        result["tanggal"] = tanggal_match.group(1).strip()
 
+    # Fallback untuk PDF yang memecah label dan nilainya ke baris berbeda.
     if not result["no_transfer"]:
-        lines = clean_text.splitlines()
-
+        lines = [line.strip() for line in clean_text.splitlines() if line.strip()]
         for i, line in enumerate(lines):
-            if re.search(r"No\s*\.?\s*Transfer", line, re.IGNORECASE):
-                same_line = re.split(
-                    r"No\s*\.?\s*Transfer\s*:?",
+            if re.search(r"\bNo\s*\.?\s*Transfer\b", line, re.IGNORECASE):
+                parts = re.split(
+                    r"\bNo\s*\.?\s*Transfer\s*:?",
                     line,
                     maxsplit=1,
                     flags=re.IGNORECASE
                 )
-                candidate = same_line[1].strip() if len(same_line) > 1 else ""
-
+                candidate = parts[1].strip() if len(parts) > 1 else ""
                 if not candidate and i + 1 < len(lines):
-                    candidate = lines[i + 1].strip()
+                    candidate = lines[i + 1]
 
-                value = re.search(
+                value_match = re.search(
                     r"[A-Z0-9][A-Z0-9._/-]*",
                     candidate,
                     re.IGNORECASE
                 )
-
-                if value:
-                    result["no_transfer"] = value.group(0)
-
+                if value_match:
+                    result["no_transfer"] = value_match.group(0).strip()
                 break
 
+    # Bersihkan sisa label jika ekstraksi PDF menempelkan beberapa kolom.
     for key in ("dari", "tujuan"):
         result[key] = re.sub(
-            r"\s+(?:No\s*\.?\s*Transfer|Tanggal)\s*:.*$",
+            r"\s+(?:No\s*\.?\s*Transfer|Tanggal|Catatan)\b.*$",
             "",
             result[key],
             flags=re.IGNORECASE
-        ).strip()
+        ).strip(" :\t-")
 
+    # Catatan, jika tersedia.
     note_match = re.search(
         r"Catatan\s*:\s*(.*?)(?=\n\s*Dicetak\s+tanggal|\Z)",
         clean_text,
         re.IGNORECASE | re.DOTALL
     )
-
     if note_match:
         result["catatan"] = " ".join(
             line.strip()
@@ -437,7 +444,6 @@ def build_pdf(df, header, diskon):
         leading=11,
         textColor=colors.black
     ))
-
     styles.add(ParagraphStyle(
         name="TitleCustom",
         fontName="Helvetica-Bold",
@@ -446,7 +452,6 @@ def build_pdf(df, header, diskon):
         alignment=TA_RIGHT,
         textColor=colors.black
     ))
-
     styles.add(ParagraphStyle(
         name="MetadataRight",
         fontName="Helvetica",
@@ -455,7 +460,6 @@ def build_pdf(df, header, diskon):
         alignment=TA_RIGHT,
         textColor=colors.black
     ))
-
     styles.add(ParagraphStyle(
         name="ProductCustom",
         fontName="Helvetica",
@@ -463,7 +467,6 @@ def build_pdf(df, header, diskon):
         leading=9,
         textColor=colors.black
     ))
-
     styles.add(ParagraphStyle(
         name="HeaderCustom",
         fontName="Helvetica-Bold",
@@ -475,7 +478,7 @@ def build_pdf(df, header, diskon):
 
     story = []
 
-    # HEADER: logo kiri, judul dan metadata kanan.
+    # LOGO DI KIRI.
     if LOGO_FILE.exists():
         logo = RLImage(
             str(LOGO_FILE),
@@ -484,40 +487,33 @@ def build_pdf(df, header, diskon):
         )
         logo.hAlign = "LEFT"
     else:
-        logo = Paragraph(
-            "<b>OXAR GLOBAL</b>",
-            styles["SmallCustom"]
-        )
+        logo = Paragraph("<b>OXAR GLOBAL</b>", styles["SmallCustom"])
 
+    # JUDUL, NOMOR TRANSFER, DAN TANGGAL DALAM SATU KOLOM KANAN.
+    # Jarak judul ke metadata dibuat cukup, tetapi tidak terlalu renggang.
     right_header = Table(
         [
             [Paragraph("SURAT JALAN", styles["TitleCustom"])],
-            [
-                Paragraph(
-                    f"<b>No. Transfer:</b> "
-                    f"{escape_html(header.get('no_transfer') or '-')}",
-                    styles["MetadataRight"]
-                )
-            ],
-            [
-                Paragraph(
-                    f"<b>Tanggal:</b> "
-                    f"{escape_html(header.get('tanggal') or '-')}",
-                    styles["MetadataRight"]
-                )
-            ],
+            [Paragraph(
+                f"<b>No. Transfer:</b> {escape_html(header.get('no_transfer') or '-')}",
+                styles["MetadataRight"]
+            )],
+            [Paragraph(
+                f"<b>Tanggal:</b> {escape_html(header.get('tanggal') or '-')}",
+                styles["MetadataRight"]
+            )],
         ],
         colWidths=[88 * mm]
     )
-
     right_header.setStyle(TableStyle([
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("ALIGN", (0, 0), (-1, -1), "RIGHT"),
         ("LEFTPADDING", (0, 0), (-1, -1), 0),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 2 * mm),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
         ("TOPPADDING", (0, 0), (-1, -1), 0),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
         ("BOTTOMPADDING", (0, 0), (0, 0), 3 * mm),
+        ("BOTTOMPADDING", (0, 1), (0, 1), 1 * mm),
     ]))
 
     header_top = Table(
@@ -525,7 +521,6 @@ def build_pdf(df, header, diskon):
         colWidths=[92 * mm, 88 * mm],
         rowHeights=[29 * mm]
     )
-
     header_top.setStyle(TableStyle([
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("ALIGN", (0, 0), (0, 0), "LEFT"),
@@ -535,12 +530,25 @@ def build_pdf(df, header, diskon):
         ("TOPPADDING", (0, 0), (-1, -1), 0),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
     ]))
-
     story.append(header_top)
     story.append(Spacer(1, 3 * mm))
 
+    # DARI hanya "OXAR + lokasi"; hilangkan awalan OXAR jika sudah ada
+    # agar tidak menjadi "OXAR OXAR ..." dan cegah metadata ikut tercetak.
     lokasi_asal = (header.get("dari") or "").strip()
-    dari_text = f"OXAR {lokasi_asal}" if lokasi_asal else "OXAR"
+    lokasi_asal = re.sub(
+        r"^\s*OXAR\s*",
+        "",
+        lokasi_asal,
+        flags=re.IGNORECASE
+    ).strip()
+    lokasi_asal = re.sub(
+        r"\s+(?:No\s*\.?\s*Transfer|Tanggal|Catatan)\b.*$",
+        "",
+        lokasi_asal,
+        flags=re.IGNORECASE
+    ).strip()
+    dari_text = f"OXAR {lokasi_asal}".strip() if lokasi_asal else "OXAR"
 
     left_info = [
         Paragraph(
@@ -558,7 +566,6 @@ def build_pdf(df, header, diskon):
         [[left_info, ""]],
         colWidths=[92 * mm, 88 * mm]
     )
-
     info_table.setStyle(TableStyle([
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("ALIGN", (0, 0), (0, 0), "LEFT"),
@@ -567,11 +574,10 @@ def build_pdf(df, header, diskon):
         ("TOPPADDING", (0, 0), (-1, -1), 0),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
     ]))
-
     story.append(info_table)
     story.append(Spacer(1, 9 * mm))
 
-    # TABEL PRODUK
+    # TABEL PRODUK.
     table_data = [[
         Paragraph("NO", styles["HeaderCustom"]),
         Paragraph("SKU", styles["HeaderCustom"]),
@@ -611,21 +617,14 @@ def build_pdf(df, header, diskon):
         ])
 
     column_widths = [
-        8 * mm,
-        30 * mm,
-        61 * mm,
-        11 * mm,
-        25 * mm,
-        18 * mm,
-        29 * mm
+        8 * mm, 30 * mm, 61 * mm, 11 * mm,
+        25 * mm, 18 * mm, 29 * mm
     ]
-
     product_table = Table(
         table_data,
         colWidths=column_widths,
         repeatRows=1
     )
-
     product_table.setStyle(TableStyle([
         ("GRID", (0, 0), (-1, -1), 0.7, colors.black),
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F1F3F5")),
@@ -643,23 +642,13 @@ def build_pdf(df, header, diskon):
         ("TOPPADDING", (0, 0), (-1, -1), 4),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
     ]))
-
     story.append(product_table)
 
-    # TOTAL QTY
+    # TOTAL QTY DI BAWAH KOLOM QTY.
     qty_summary = Table(
-        [[
-            "",
-            "Total Qty",
-            "",
-            format_number(total_qty),
-            "",
-            "",
-            ""
-        ]],
+        [["", "Total Qty", "", format_number(total_qty), "", "", ""]],
         colWidths=column_widths
     )
-
     qty_summary.setStyle(TableStyle([
         ("SPAN", (1, 0), (2, 0)),
         ("ALIGN", (1, 0), (2, 0), "RIGHT"),
@@ -671,34 +660,19 @@ def build_pdf(df, header, diskon):
         ("TOPPADDING", (0, 0), (-1, -1), 3),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
     ]))
-
     story.append(qty_summary)
     story.append(Spacer(1, 3 * mm))
 
-    # RINGKASAN
+    # RINGKASAN TOTAL.
     grand_total = subtotal - total_diskon
-
     summary_data = [
         ["", "", "", "", "Sub Total", rupiah(subtotal)],
         ["", "", "", "", "Diskon", rupiah(total_diskon)],
         ["", "", "", "", "Diskon Lainnya", rupiah(0)],
         ["", "", "", "", "Grand Total", rupiah(grand_total)],
     ]
-
-    summary_widths = [
-        8 * mm,
-        30 * mm,
-        61 * mm,
-        11 * mm,
-        36 * mm,
-        36 * mm
-    ]
-
-    summary_table = Table(
-        summary_data,
-        colWidths=summary_widths
-    )
-
+    summary_widths = [8 * mm, 30 * mm, 61 * mm, 11 * mm, 36 * mm, 36 * mm]
+    summary_table = Table(summary_data, colWidths=summary_widths)
     summary_table.setStyle(TableStyle([
         ("SPAN", (0, 0), (3, -1)),
         ("ALIGN", (4, 0), (4, -1), "RIGHT"),
@@ -712,51 +686,33 @@ def build_pdf(df, header, diskon):
         ("TOPPADDING", (0, 0), (-1, -1), 2),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
     ]))
-
     story.append(summary_table)
     story.append(Spacer(1, 5 * mm))
 
-    # CATATAN
-    story.append(
-        Paragraph("<b>Catatan:</b>", styles["SmallCustom"])
-    )
+    # CATATAN.
+    story.append(Paragraph("<b>Catatan:</b>", styles["SmallCustom"]))
+    story.append(Paragraph(
+        escape_html(header.get("catatan") or "-"),
+        styles["SmallCustom"]
+    ))
 
-    story.append(
-        Paragraph(
-            escape_html(header.get("catatan") or "-"),
-            styles["SmallCustom"]
-        )
-    )
-
-    # TANDA TANGAN DAN TANGGAL CETAK
+    # TANDA TANGAN DI BAGIAN BAWAH; TANGGAL CETAK PALING BAWAH.
     def draw_print_date(canvas, document):
         canvas.saveState()
-
-        page_width, page_height = A4
+        page_width, _ = A4
 
         centers = [
             page_width * 0.185,
             page_width * 0.50,
             page_width * 0.815
         ]
-
-        headings = [
-            "Diterima Oleh,",
-            "Dikirim Oleh,",
-            "Hormat Kami,"
-        ]
+        headings = ["Diterima Oleh,", "Dikirim Oleh,", "Hormat Kami,"]
 
         canvas.setFont("Helvetica-Bold", 8.5)
-
         for x, heading in zip(centers, headings):
-            canvas.drawCentredString(
-                x,
-                32 * mm,
-                heading
-            )
+            canvas.drawCentredString(x, 32 * mm, heading)
 
         canvas.setFont("Helvetica", 8)
-
         for x in centers:
             canvas.drawCentredString(
                 x,
@@ -765,14 +721,11 @@ def build_pdf(df, header, diskon):
             )
 
         canvas.setFillColor(colors.HexColor("#333333"))
-
         canvas.drawString(
             13 * mm,
             7 * mm,
-            "Dicetak tanggal : "
-            + datetime.now().strftime("%d %b %Y %H:%M")
+            "Dicetak tanggal : " + datetime.now().strftime("%d %b %Y %H:%M")
         )
-
         canvas.restoreState()
 
     doc.build(
@@ -780,7 +733,6 @@ def build_pdf(df, header, diskon):
         onFirstPage=draw_print_date,
         onLaterPages=draw_print_date
     )
-
     output.seek(0)
     return output.getvalue()
 

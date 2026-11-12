@@ -525,7 +525,7 @@ def extract_sku_qty(pdf_bytes):
 # 7. MEMBUAT PDF SURAT JALAN
 # =========================================================
 
-def build_pdf(df, header, diskon):
+def build_pdf(df, header, diskon, additional_diskon):
     output = BytesIO()
 
     doc = SimpleDocTemplate(
@@ -677,12 +677,13 @@ def build_pdf(df, header, diskon):
         Paragraph("NAMA BARANG", styles["HeaderCustom"]),
         Paragraph("QTY", styles["HeaderCustom"]),
         Paragraph("HARGA (UNIT)", styles["HeaderCustom"]),
-        Paragraph("DISKON", styles["HeaderCustom"]),
-        Paragraph("HARGA SETELAH<br/>DISKON", styles["HeaderCustom"]),
+        Paragraph("DISKON 1<br/>ADD. DISKON", styles["HeaderCustom"]),
+        Paragraph("HARGA AKHIR<br/>SETELAH DISKON", styles["HeaderCustom"]),
     ]]
 
     subtotal = 0
     total_diskon = 0
+    total_additional_diskon = 0
     total_qty = 0
 
     for index, row in df.reset_index(drop=True).iterrows():
@@ -693,10 +694,15 @@ def build_pdf(df, header, diskon):
 
         nilai_subtotal = qty * harga
         nilai_diskon = nilai_subtotal * float(diskon) / 100
-        harga_setelah_diskon = nilai_subtotal - nilai_diskon
+        setelah_diskon_utama = nilai_subtotal - nilai_diskon
+        nilai_additional_diskon = (
+            setelah_diskon_utama * float(additional_diskon) / 100
+        )
+        harga_akhir = setelah_diskon_utama - nilai_additional_diskon
 
         subtotal += nilai_subtotal
         total_diskon += nilai_diskon
+        total_additional_diskon += nilai_additional_diskon
         total_qty += qty
 
         table_data.append([
@@ -705,13 +711,16 @@ def build_pdf(df, header, diskon):
             Paragraph(escape_html(nama), styles["ProductCustom"]),
             format_number(qty),
             rupiah(harga),
-            format_percent(diskon),
-            rupiah(harga_setelah_diskon),
+            Paragraph(
+                f"{format_percent(diskon)}<br/>{format_percent(additional_diskon)}",
+                styles["ProductCustom"]
+            ),
+            rupiah(harga_akhir),
         ])
 
     column_widths = [
-        8 * mm, 30 * mm, 61 * mm, 11 * mm,
-        25 * mm, 18 * mm, 29 * mm
+        8 * mm, 29 * mm, 58 * mm, 11 * mm,
+        24 * mm, 21 * mm, 29 * mm
     ]
     product_table = Table(
         table_data,
@@ -757,11 +766,11 @@ def build_pdf(df, header, diskon):
     story.append(Spacer(1, 3 * mm))
 
     # RINGKASAN TOTAL.
-    grand_total = subtotal - total_diskon
+    grand_total = subtotal - total_diskon - total_additional_diskon
     summary_data = [
         ["", "", "", "", "Sub Total", rupiah(subtotal)],
         ["", "", "", "", "Diskon", rupiah(total_diskon)],
-        ["", "", "", "", "Diskon Lainnya", rupiah(0)],
+        ["", "", "", "", "Diskon Lainnya", rupiah(total_additional_diskon)],
         ["", "", "", "", "Grand Total", rupiah(grand_total)],
     ]
     summary_widths = [8 * mm, 30 * mm, 61 * mm, 11 * mm, 36 * mm, 36 * mm]
@@ -941,7 +950,7 @@ if uploaded_file:
             height=60
         )
 
-    # SATU INPUT DISKON
+    # PENGATURAN DISKON UTAMA DAN ADDITIONAL DISKON
     st.markdown(
         '<div class="section-title">3. Pengaturan Diskon</div>',
         unsafe_allow_html=True
@@ -951,26 +960,41 @@ if uploaded_file:
         """
         <div class="hint">
             <b>Diskon berlaku untuk seluruh produk.</b><br>
-            Tim area cukup memasukkan persentase diskon satu kali.
-            Sistem akan otomatis menerapkan diskon yang sama
-            ke semua SKU dalam satu Surat Jalan.
+            Diskon utama dihitung terlebih dahulu dari subtotal (harga satuan × QTY).
+            Additional diskon kemudian dihitung dari nilai setelah diskon utama.
+            Kedua persentase berlaku sama untuk seluruh SKU dalam satu Surat Jalan.
         </div>
         """,
         unsafe_allow_html=True
     )
 
-    diskon = st.number_input(
-        "Masukkan Diskon Seluruh Produk (%)",
-        min_value=0.0,
-        max_value=100.0,
-        value=20.0,
-        step=1.0,
-        format="%.2f",
-        help="Contoh: masukkan 30 untuk diskon 30%."
-    )
+    discount_col1, discount_col2 = st.columns(2)
+
+    with discount_col1:
+        diskon = st.number_input(
+            "Masukkan Diskon Utama (%)",
+            min_value=0.0,
+            max_value=100.0,
+            value=20.0,
+            step=1.0,
+            format="%.2f",
+            help="Diskon pertama dihitung dari harga satuan × QTY."
+        )
+
+    with discount_col2:
+        additional_diskon = st.number_input(
+            "Masukkan Additional Diskon (%)",
+            min_value=0.0,
+            max_value=100.0,
+            value=0.0,
+            step=1.0,
+            format="%.2f",
+            help="Diskon tambahan dihitung setelah diskon utama dikurangi."
+        )
 
     st.info(
-        f"Diskon aktif untuk semua produk: {format_percent(diskon)}"
+        f"Diskon utama: {format_percent(diskon)} | "
+        f"Additional diskon: {format_percent(additional_diskon)}"
     )
 
     # DATA PRODUK
@@ -984,7 +1008,8 @@ if uploaded_file:
             "NAMA BARANG": product["nama_produk"],
             "QTY": item["qty"],
             "HARGA (UNIT)": product["harga"],
-            "DISKON (%)": diskon
+            "DISKON UTAMA (%)": diskon,
+            "ADDITIONAL DISKON (%)": additional_diskon
         })
 
     df = pd.DataFrame(product_data)
@@ -1005,17 +1030,32 @@ if uploaded_file:
         preview["SUBTOTAL"] * diskon / 100
     )
 
-    preview["HARGA SETELAH DISKON"] = (
+    preview["SETELAH DISKON UTAMA"] = (
         preview["SUBTOTAL"] - preview["NILAI DISKON"]
+    )
+
+    preview["NILAI ADDITIONAL DISKON"] = (
+        preview["SETELAH DISKON UTAMA"] * additional_diskon / 100
+    )
+
+    preview["HARGA AKHIR"] = (
+        preview["SETELAH DISKON UTAMA"]
+        - preview["NILAI ADDITIONAL DISKON"]
     )
 
     display_df = preview.copy()
 
     display_df["HARGA (UNIT)"] = display_df["HARGA (UNIT)"].map(rupiah)
-    display_df["DISKON (%)"] = display_df["DISKON (%)"].map(format_percent)
-    display_df["SUBTOTAL"] = display_df["SUBTOTAL"].map(rupiah)
-    display_df["NILAI DISKON"] = display_df["NILAI DISKON"].map(rupiah)
-    display_df["HARGA SETELAH DISKON"] = display_df["HARGA SETELAH DISKON"].map(rupiah)
+    display_df["DISKON UTAMA (%)"] = display_df["DISKON UTAMA (%)"].map(format_percent)
+    display_df["ADDITIONAL DISKON (%)"] = display_df["ADDITIONAL DISKON (%)"].map(format_percent)
+    for money_column in [
+        "SUBTOTAL",
+        "NILAI DISKON",
+        "SETELAH DISKON UTAMA",
+        "NILAI ADDITIONAL DISKON",
+        "HARGA AKHIR"
+    ]:
+        display_df[money_column] = display_df[money_column].map(rupiah)
 
     st.dataframe(
         display_df,
@@ -1027,19 +1067,23 @@ if uploaded_file:
     total_qty = int(preview["QTY"].sum())
     subtotal = float(preview["SUBTOTAL"].sum())
     total_diskon = float(preview["NILAI DISKON"].sum())
-    grand_total = subtotal - total_diskon
+    total_additional_diskon = float(
+        preview["NILAI ADDITIONAL DISKON"].sum()
+    )
+    grand_total = subtotal - total_diskon - total_additional_diskon
 
     st.markdown(
         '<div class="section-title">5. Ringkasan Perhitungan</div>',
         unsafe_allow_html=True
     )
 
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
 
     col1.metric("Total Qty", format_number(total_qty))
     col2.metric("Sub Total", rupiah(subtotal))
-    col3.metric("Total Diskon", rupiah(total_diskon))
-    col4.metric("Grand Total", rupiah(grand_total))
+    col3.metric("Diskon Utama", rupiah(total_diskon))
+    col4.metric("Additional Diskon", rupiah(total_additional_diskon))
+    col5.metric("Grand Total", rupiah(grand_total))
 
     # GENERATE PDF
     st.markdown(
@@ -1067,7 +1111,8 @@ if uploaded_file:
             pdf_output = build_pdf(
                 df,
                 header,
-                diskon
+                diskon,
+                additional_diskon
             )
 
             nomor_file = re.sub(

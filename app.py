@@ -677,7 +677,8 @@ def build_pdf(df, header, diskon, additional_diskon):
         Paragraph("NAMA BARANG", styles["HeaderCustom"]),
         Paragraph("QTY", styles["HeaderCustom"]),
         Paragraph("HARGA (UNIT)", styles["HeaderCustom"]),
-        Paragraph("DISKON 1<br/>ADD. DISKON", styles["HeaderCustom"]),
+        Paragraph("DISKON", styles["HeaderCustom"]),
+        Paragraph("ADDITIONAL<br/>DISKON", styles["HeaderCustom"]),
         Paragraph("HARGA AKHIR<br/>SETELAH DISKON", styles["HeaderCustom"]),
     ]]
 
@@ -711,16 +712,14 @@ def build_pdf(df, header, diskon, additional_diskon):
             Paragraph(escape_html(nama), styles["ProductCustom"]),
             format_number(qty),
             rupiah(harga),
-            Paragraph(
-                f"{format_percent(diskon)}<br/>{format_percent(additional_diskon)}",
-                styles["ProductCustom"]
-            ),
+            format_percent(diskon),
+            format_percent(additional_diskon),
             rupiah(harga_akhir),
         ])
 
     column_widths = [
-        8 * mm, 29 * mm, 58 * mm, 11 * mm,
-        24 * mm, 21 * mm, 29 * mm
+        7 * mm, 27 * mm, 55 * mm, 10 * mm,
+        24 * mm, 15 * mm, 20 * mm, 26 * mm
     ]
     product_table = Table(
         table_data,
@@ -735,8 +734,8 @@ def build_pdf(df, header, diskon, additional_diskon):
         ("ALIGN", (0, 1), (1, -1), "CENTER"),
         ("ALIGN", (3, 1), (3, -1), "CENTER"),
         ("ALIGN", (4, 1), (4, -1), "RIGHT"),
-        ("ALIGN", (5, 1), (5, -1), "CENTER"),
-        ("ALIGN", (6, 1), (6, -1), "RIGHT"),
+        ("ALIGN", (5, 1), (6, -1), "CENTER"),
+        ("ALIGN", (7, 1), (7, -1), "RIGHT"),
         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
         ("FONTSIZE", (0, 0), (-1, -1), 7.5),
         ("LEFTPADDING", (0, 0), (-1, -1), 3),
@@ -748,7 +747,7 @@ def build_pdf(df, header, diskon, additional_diskon):
 
     # TOTAL QTY DI BAWAH KOLOM QTY.
     qty_summary = Table(
-        [["", "Total Qty", "", format_number(total_qty), "", "", ""]],
+        [["", "Total Qty", "", format_number(total_qty), "", "", "", ""]],
         colWidths=column_widths
     )
     qty_summary.setStyle(TableStyle([
@@ -770,7 +769,7 @@ def build_pdf(df, header, diskon, additional_diskon):
     summary_data = [
         ["", "", "", "", "Sub Total", rupiah(subtotal)],
         ["", "", "", "", "Diskon", rupiah(total_diskon)],
-        ["", "", "", "", "Diskon Lainnya", rupiah(total_additional_diskon)],
+        ["", "", "", "", "Additional Diskon", rupiah(total_additional_diskon)],
         ["", "", "", "", "Grand Total", rupiah(grand_total)],
     ]
     summary_widths = [8 * mm, 30 * mm, 61 * mm, 11 * mm, 36 * mm, 36 * mm]
@@ -1046,7 +1045,8 @@ if uploaded_file:
     display_df = preview.copy()
 
     display_df["HARGA (UNIT)"] = display_df["HARGA (UNIT)"].map(rupiah)
-    display_df["DISKON UTAMA (%)"] = display_df["DISKON UTAMA (%)"].map(format_percent)
+    display_df["DISKON (%)"] = display_df["DISKON UTAMA (%)"].map(format_percent)
+    display_df = display_df.drop(columns=["DISKON UTAMA (%)"])
     display_df["ADDITIONAL DISKON (%)"] = display_df["ADDITIONAL DISKON (%)"].map(format_percent)
     for money_column in [
         "SUBTOTAL",
